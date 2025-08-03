@@ -1,0 +1,18 @@
+[project]
+name = "community-calendar-manager"
+version = "0.1.0"
+description = " A simple Streamlit app for reviewing submission to a community calendar"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "authlib>=1.6.1",
+    "google-api-python-client>=2.177.0",
+    "google-auth>=2.40.3",
+    "gspread>=6.2.1",
+    "streamlit>=1.47.1",
+]
+
+[dependency-groups]
+dev = [
+    "watchdog>=6.0.0",
+]
