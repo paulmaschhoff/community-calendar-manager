@@ -115,7 +115,7 @@ def ensure_status_columns(spreadsheet_id, worksheet_name='Form Responses 1'):
     st.rerun()  # Rerun to reflect changes immediately
 
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=300, show_spinner=False)  # Cache for 5 minutes
 def load_spreadsheet_data(spreadsheet_id, worksheet_name='Form Responses 1'):
     """
     Load data from a Google Spreadsheet, filtering out ignored/completed items.
@@ -142,11 +142,8 @@ def load_spreadsheet_data(spreadsheet_id, worksheet_name='Form Responses 1'):
         # Get the specified worksheet
         worksheet = spreadsheet.worksheet(worksheet_name)
 
-        # Get all records as a list of dictionaries
-        records = worksheet.get_all_records()
-
-        # Convert to pandas DataFrame
-        df = pd.DataFrame(records)
+        # Load all records into a DataFrame
+        df = pd.DataFrame(worksheet.get_all_records())
 
         if not df.empty:
             # Filter out ignored and completed submissions
@@ -154,9 +151,6 @@ def load_spreadsheet_data(spreadsheet_id, worksheet_name='Form Responses 1'):
 
             # Filter out columns that are not needed for display
             df = df.drop(columns=[FIELDS.STATUS, FIELDS.LAST_UPDATED_BY], errors='ignore')
-
-            # Reset index for display
-            df = df.reset_index(drop=True)
 
         return df
 
@@ -207,7 +201,9 @@ def get_authorized_users(spreadsheet_id: str) -> set:
         return set()
 
 
-def update_submission_status(spreadsheet_id, row_idx, status, worksheet_name='Form Responses 1'):
+def update_submission_status(
+    spreadsheet_id: str, row_idx: int, status: str, worksheet_name: str = 'Form Responses 1'
+):
     """
     Update the status of a submission in the spreadsheet.
 
@@ -238,12 +234,11 @@ def update_submission_status(spreadsheet_id, row_idx, status, worksheet_name='Fo
         last_updated_col = headers.index('Last Updated By') + 1
 
         # Update status
-        worksheet.update_cell(
-            row_idx + 2, status_col, status
-        )  # +2: +1 for header row, +1 for 1-based indexing
+        row_num = row_idx + 2  # Convert to 1-based index for Google Sheets
+        worksheet.update_cell(row_num, status_col, status)
 
         # Update last updated by
-        worksheet.update_cell(row_idx + 2, last_updated_col, st.user.name)  # type: ignore
+        worksheet.update_cell(row_num, last_updated_col, st.user.name)  # type: ignore
 
         # Clear cache to reflect changes
         st.cache_data.clear()
@@ -566,20 +561,17 @@ def main():
     st.header('Pending Submissions')
 
     with st.spinner('Loading submissions...'):
-        df = load_spreadsheet_data(spreadsheet_id)
+        submissions = load_spreadsheet_data(spreadsheet_id)
 
-    if df.empty:
+    if submissions.empty:
         st.info('No pending submissions to review.')
         st.stop()
 
-    st.success(f'Loaded {len(df)} pending submissions')
-
-    # Create a display dataframe (exclude Status from display, rename Timestamp)
-    display_df = df.copy()
+    st.success(f'Loaded {len(submissions)} pending submissions')
 
     # Display the dataframe with row selection
     dataframe_state = st.dataframe(
-        display_df.rename(columns={'Timestamp': 'Submission Time'}),
+        submissions.rename(columns={'Timestamp': 'Submission Time'}),
         use_container_width=True,
         on_select='rerun',
         selection_mode='single-row',
@@ -587,8 +579,10 @@ def main():
     )
 
     # Check that all expected columns are present
-    missing_columns = [col for col in REQUIRED_FIELDS + OPTIONAL_FIELDS if col not in df.columns]
-    if missing_columns:
+    missing_columns = [
+        col for col in REQUIRED_FIELDS + OPTIONAL_FIELDS if col not in submissions.columns
+    ]
+    if len(missing_columns) > 0:
         st.error(
             f'The following required columns are missing from the spreadsheet: {", ".join(missing_columns)}'
         )
@@ -596,14 +590,13 @@ def main():
 
     # Handle row selection
     if len((rows := dataframe_state.selection.rows)) > 0:  # type: ignore
-        selected_row_idx = rows[0]
-        selected_row_data = df.iloc[selected_row_idx].to_dict()
+        selected_row = submissions.iloc[rows[0]]
 
         st.divider()
         st.subheader('Edit Submission Details')
 
         # Create editable fields for the selected submission
-        edited_data = show_event_editor(selected_row_data)
+        edited_data = show_event_editor(selected_row.to_dict())
         if not validate_event_data(edited_data):
             st.stop()
 
@@ -614,21 +607,17 @@ def main():
         with st.container(horizontal=True):
             if st.button('🚫 Mark as Ignored', type='secondary'):
                 # Find original row index
-                if update_submission_status(spreadsheet_id, selected_row_idx, 'Ignored'):
-                    st.success(f"Event '{edited_data[FIELDS.EVENT_NAME]}' marked as ignored")
+                if update_submission_status(spreadsheet_id, selected_row.name, 'Ignored'):
+                    st.success(f"Marked '{edited_data[FIELDS.EVENT_NAME]}' as ignored")
 
             if st.button('📅 Add to Calendar', type='primary'):
                 if add_event_to_calendar(edited_data):
                     if update_submission_status(
-                        spreadsheet_id, selected_row_idx, 'Added to Calendar'
+                        spreadsheet_id, selected_row.name, 'Added to Calendar'
                     ):
-                        st.success(f"Event '{edited_data[FIELDS.EVENT_NAME]}' added to calendar!")
+                        st.success(f"Added '{edited_data[FIELDS.EVENT_NAME]}' to calendar!")
                 else:
                     st.error('Failed to add event to calendar.')
-
-            if st.button('🔄 Refresh Data', key='bottom_refresh'):
-                st.cache_data.clear()
-                st.rerun()
 
     else:
         st.info(
