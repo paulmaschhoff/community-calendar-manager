@@ -6,6 +6,7 @@ import gspread
 import pandas as pd
 import streamlit as st
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 
 # Scopes required for Google Sheets access
 SCOPES = [
@@ -34,6 +35,7 @@ class FIELDS:
     EMAIL = 'Email Address'
     STATUS = 'Status'
     LAST_UPDATED_BY = 'Last Updated By'
+    ATTACHMENT = 'Attachment'
 
 
 REQUIRED_FIELDS = [
@@ -51,11 +53,12 @@ OPTIONAL_FIELDS = [
     FIELDS.START_TIME,
     FIELDS.END_TIME,
     FIELDS.END_DATE,
+    FIELDS.ATTACHMENT,
 ]
 
 
 @st.cache_resource
-def get_google_sheets_client():
+def get_google_sheets_client() -> gspread.Client:
     """
     Create and cache a Google Sheets client using service account credentials.
 
@@ -116,7 +119,7 @@ def ensure_status_columns(spreadsheet_id, worksheet_name='Form Responses 1'):
 
 
 @st.cache_data(ttl=300, show_spinner=False)  # Cache for 5 minutes
-def load_spreadsheet_data(spreadsheet_id, worksheet_name='Form Responses 1'):
+def load_spreadsheet_data(spreadsheet_id, worksheet_name='Form Responses 1') -> pd.DataFrame:
     """
     Load data from a Google Spreadsheet, filtering out ignored/completed items.
 
@@ -169,7 +172,7 @@ def load_spreadsheet_data(spreadsheet_id, worksheet_name='Form Responses 1'):
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_authorized_users(spreadsheet_id: str) -> set:
     """
-    Get the list of authorized users from the spreadsheet.
+    Get the authorized users from the spreadsheet.
 
     Parameters
     ----------
@@ -203,7 +206,7 @@ def get_authorized_users(spreadsheet_id: str) -> set:
 
 def update_submission_status(
     spreadsheet_id: str, row_idx: int, status: str, worksheet_name: str = 'Form Responses 1'
-):
+) -> bool:
     """
     Update the status of a submission in the spreadsheet.
 
@@ -251,29 +254,68 @@ def update_submission_status(
 
 
 @st.cache_resource
-def get_google_calendar_service():
+def get_google_api_resource(api_name: str):
     """
-    Create and cache a Google Calendar service using service account credentials.
+    Create and cache a Google API service resource using service account credentials.
+
+    Parameters
+    ----------
+    api_name : str
+        The name of the Google API (e.g., 'drive', 'calendar').
 
     Returns
     -------
     googleapiclient.discovery.Resource
-        An authorized Google Calendar API service resource.
+        An authorized Google API service resource.
     """
     try:
         service_account_info = st.secrets['gcp_service_account']
         credentials = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
-        from googleapiclient.discovery import build
 
-        service = build('calendar', 'v3', credentials=credentials)
+        service = build(api_name, 'v3', credentials=credentials)
         return service
     except Exception as e:
-        st.error('Failed to authenticate with Google Calendar:')
+        st.error(f'Failed to authenticate with Google {api_name.capitalize()}:')
         st.exception(e)
         st.stop()
 
 
-def add_event_to_calendar(event_data: dict):
+@st.cache_data()
+def get_drive_file_name(file_url: str) -> str | None:
+    """
+    Get a the name of a file from Google Drive given its URL.
+
+    Parameters
+    ----------
+    file_url : str
+        The Google Drive file URL.
+
+    Returns
+    -------
+    str | None
+        The name of the file, or None if the file cannot be accessed.
+    """
+    try:
+        # Extract file ID from the URL
+        file_id = None
+        if '/file/d/' in file_url:
+            file_id = file_url.split('/file/d/')[1].split('/')[0]
+        elif 'id=' in file_url:
+            file_id = file_url.split('id=')[1].split('&')[0]
+
+        if not file_id:
+            return None
+
+        # Call the Drive API to get the file metadata
+        file = get_google_api_resource('drive').files().get(fileId=file_id, fields='name').execute()
+        return file.get('name')
+
+    except Exception as e:
+        st.error('Failed to get file name from Google Drive:')
+        st.exception(e)
+
+
+def add_event_to_calendar(event_data: dict) -> bool:
     """
     Add an event to the Google Calendar using the provided event data.
 
@@ -287,11 +329,14 @@ def add_event_to_calendar(event_data: dict):
     bool
         Success status.
     """
+    # Construct the event body
     event: dict = dict(
         summary=event_data[FIELDS.EVENT_NAME],
         location=event_data[FIELDS.LOCATION],
         description=format_description(event_data),
     )
+
+    # Set start and end times/dates
     tz = {'timeZone': 'America/Chicago'}
     if event_data[FIELDS.START_TIME] is None:
         event['start'] = {'date': event_data[FIELDS.EVENT_DATE].isoformat()}
@@ -306,12 +351,19 @@ def add_event_to_calendar(event_data: dict):
             **tz,
         )
 
+    # Add attachment if provided
+    if (attachment_url := event_data.get(FIELDS.ATTACHMENT)) not in (None, ''):
+        attachment_name = get_drive_file_name(attachment_url) or 'Attachment'
+        event['attachments'] = [{'fileUrl': attachment_url, 'title': attachment_name}]
+
+    # Add the event to the calendar
     if (calendar_id := st.secrets.get('calendar_id')) is None:
         st.error('Calendar ID not found in secrets. Please add it to .streamlit/secrets.toml')
         return False
     try:
-        service = get_google_calendar_service()
-        service.events().insert(calendarId=calendar_id, body=event).execute()
+        get_google_api_resource('calendar').events().insert(
+            calendarId=calendar_id, body=event, supportsAttachments=True
+        ).execute()
         return True
     except Exception as e:
         st.error(
@@ -424,12 +476,20 @@ def show_event_editor(event_data: dict):
     with col2:
         show_field_editor(FIELDS.EMAIL, event_data)
         show_field_editor(FIELDS.FEE, event_data)
+    if (attachment_url := event_data.get(FIELDS.ATTACHMENT)) not in (None, ''):
+        attachment_name = get_drive_file_name(attachment_url)
+        st.markdown(
+            f'Attachment: [{attachment_name if attachment_name else attachment_url}]'
+            f'({attachment_url}) :material/open_in_new:'
+        )
+    else:
+        st.write('No attachment provided.')
 
-    date1, time1, date2, time2 = st.columns(4)
     st.write(
         'All-day events should have `Start Time` and `End Time` left empty and may span multiple days. '
         'All events are assumed to be in the Central Time Zone (America/Chicago).'
     )
+    date1, time1, date2, time2 = st.columns(4)
     with date1:
         show_field_editor(FIELDS.EVENT_DATE, event_data)
     with time1:
@@ -458,6 +518,11 @@ def validate_event_data(event_data: dict) -> bool:
     """
     errors = []
     warnings = []
+
+    # Check if event date is in the past
+    today = datetime.now().date()
+    if event_data[FIELDS.EVENT_DATE] < today:
+        warnings.append('Event start date is in the past.')
 
     # Check that the event data contains all required fields
     for field in REQUIRED_FIELDS:
