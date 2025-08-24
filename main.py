@@ -199,9 +199,12 @@ def get_authorized_users(spreadsheet_id: str) -> set:
         return usernames
 
     except Exception as e:
-        st.error('Error retrieving authorized users:')
+        st.error(
+            'Error retrieving authorized users. Check that the spreadsheet is shared with the '
+            'service account, and that the service account project has the Google Sheets API enabled.'
+        )
         st.exception(e)
-        return set()
+        st.stop()
 
 
 def update_submission_status(
@@ -311,7 +314,10 @@ def get_drive_file_name(file_url: str) -> str | None:
         return file.get('name')
 
     except Exception as e:
-        st.error('Failed to get file name from Google Drive:')
+        st.error(
+            'Failed to get file name from Google Drive. '
+            'Please check that the Gogle Drive API is enabled in the GCP project.'
+        )
         st.exception(e)
 
 
