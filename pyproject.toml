@@ -9,7 +9,7 @@ dependencies = [
     "google-api-python-client>=2.177.0",
     "google-auth>=2.40.3",
     "gspread>=6.2.1",
-    "streamlit>=1.47.1",
+    "streamlit>=1.52.0",
 ]
 
 [dependency-groups]

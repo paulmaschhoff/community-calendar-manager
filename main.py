@@ -36,6 +36,8 @@ class FIELDS:
     STATUS = 'Status'
     LAST_UPDATED_BY = 'Last Updated By'
     ATTACHMENT = 'Attachment'
+    FREQUENCY = 'Event Frequency'
+    END_REPEAT_DATE = 'End Repeat After'
 
 
 REQUIRED_FIELDS = [
@@ -47,6 +49,7 @@ REQUIRED_FIELDS = [
     FIELDS.FEE,
     FIELDS.EVENT_DATE,
     FIELDS.EMAIL,
+    FIELDS.FREQUENCY,
 ]
 
 OPTIONAL_FIELDS = [
@@ -54,7 +57,16 @@ OPTIONAL_FIELDS = [
     FIELDS.END_TIME,
     FIELDS.END_DATE,
     FIELDS.ATTACHMENT,
+    FIELDS.END_REPEAT_DATE,
 ]
+
+FREQUENCY_OPTIONS = {
+    'Daily': 'DAILY',
+    'Weekly': 'WEEKLY',
+    'Every two weeks': 'WEEKLY;INTERVAL=2',
+    'Monthly': 'MONTHLY',
+    'Yearly': 'YEARLY',
+}
 
 
 @st.cache_resource
@@ -357,6 +369,13 @@ def add_event_to_calendar(event_data: dict) -> bool:
             **tz,
         )
 
+    # Add recurrence if applicable
+    if event_data[FIELDS.FREQUENCY] != 'One-time':
+        rrule = f'RRULE:FREQ={FREQUENCY_OPTIONS[event_data[FIELDS.FREQUENCY]]};'
+        if event_data[FIELDS.END_REPEAT_DATE] is not None:
+            rrule += f'UNTIL={event_data[FIELDS.END_REPEAT_DATE].strftime("%Y%m%d")}T235959Z'
+        event['recurrence'] = [rrule]
+
     # Add attachment if provided
     if (attachment_url := event_data.get(FIELDS.ATTACHMENT)) not in (None, ''):
         attachment_name = get_drive_file_name(attachment_url) or 'Attachment'
@@ -427,19 +446,35 @@ def show_field_editor(field_name: str, event_data: dict):
             # Convert string to time for st.time_input
             value = pd.to_datetime(value).time()
         event_data[field_name] = st.time_input(field_name, value=value)
-    elif field_name in (FIELDS.EVENT_DATE, FIELDS.END_DATE):
+    elif field_name in (FIELDS.EVENT_DATE, FIELDS.END_DATE, FIELDS.END_REPEAT_DATE):
         # Convert string to date for st.date_input
         if field_name == FIELDS.END_DATE and value == '':
+            # if end date is not set, default to event date
             value = event_data[FIELDS.EVENT_DATE]
+        elif field_name == FIELDS.END_REPEAT_DATE and value in ('', None):
+            value = None  # allow empty end repeat date, set to None
         else:
             value = datetime.strptime(str(value), '%m/%d/%Y')
-        event_data[field_name] = st.date_input(field_name, value=value, format='MM/DD/YYYY')
+        event_data[field_name] = st.date_input(
+            field_name,
+            value=value,
+            format='MM/DD/YYYY',
+            disabled=FIELDS.END_REPEAT_DATE and event_data[FIELDS.FREQUENCY] == 'One-time',
+        )
     elif field_name == FIELDS.DESCRIPTION:
         event_data[field_name] = st.text_area(
             field_name,
             value=value,
             help='This free-text description will be combined with the structured data to create '
             'the full formatted event description.',
+        )
+    elif field_name == FIELDS.FREQUENCY:
+        options = ['One-time', *FREQUENCY_OPTIONS.keys()]
+        if value not in options:
+            st.warning(f"Unexpected value '{value}' for Event Frequency. Defaulting to 'One-time'.")
+            value = 'One-time'
+        event_data[field_name] = st.selectbox(
+            field_name, options=options, index=options.index(value)
         )
     else:
         event_data[field_name] = st.text_input(field_name, value=value)
@@ -498,8 +533,10 @@ def show_event_editor(event_data: dict):
     date1, time1, date2, time2 = st.columns(4)
     with date1:
         show_field_editor(FIELDS.EVENT_DATE, event_data)
+        show_field_editor(FIELDS.FREQUENCY, event_data)
     with time1:
         show_field_editor(FIELDS.START_TIME, event_data)
+        show_field_editor(FIELDS.END_REPEAT_DATE, event_data)
     with date2:
         show_field_editor(FIELDS.END_DATE, event_data)
     with time2:
@@ -548,6 +585,11 @@ def validate_event_data(event_data: dict) -> bool:
             errors.append('If Start Time is set, End Time must also be set.')
         elif event_data[FIELDS.END_TIME] < event_data[FIELDS.START_TIME]:
             errors.append('End Time must be after Start Time.')
+    elif (
+        event_data[FIELDS.END_REPEAT_DATE] is not None
+        and event_data[FIELDS.END_REPEAT_DATE] < event_data[FIELDS.EVENT_DATE]
+    ):
+        errors.append('End Repeat After date cannot be earlier than Event Date.')
 
     # Validate email format
     email_pattern = r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,6}$'
