@@ -685,7 +685,7 @@ def main():
     # Display the dataframe with row selection
     dataframe_state = st.dataframe(
         submissions.rename(columns={'Timestamp': 'Submission Time'}),
-        use_container_width=True,
+        width='stretch',
         on_select='rerun',
         selection_mode='single-row',
         hide_index=True,
