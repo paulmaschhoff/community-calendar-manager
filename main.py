@@ -371,7 +371,14 @@ def add_event_to_calendar(event_data: dict) -> bool:
 
     # Add recurrence if applicable
     if event_data[FIELDS.FREQUENCY] != 'One-time':
-        rrule = f'RRULE:FREQ={FREQUENCY_OPTIONS[event_data[FIELDS.FREQUENCY]]};'
+        # Build an RRULE string. For monthly rules, preserve the same weekday-occurrence
+        # in the month (e.g., 4th Saturday) by using an ordinal prefix on BYDAY (RFC5545)
+        freq_value = FREQUENCY_OPTIONS[event_data[FIELDS.FREQUENCY]]
+        # For monthly frequency, compute BYDAY using the module-level helper
+
+        rrule = f'RRULE:FREQ={freq_value};'
+        if freq_value == 'MONTHLY':
+            rrule += monthly_byday(event_data[FIELDS.EVENT_DATE])
         if event_data[FIELDS.END_REPEAT_DATE] is not None:
             rrule += f'UNTIL={event_data[FIELDS.END_REPEAT_DATE].strftime("%Y%m%d")}T235959Z'
         event['recurrence'] = [rrule]
@@ -421,6 +428,28 @@ def format_description(event_data: dict) -> str:
         f'<strong>Fee:</strong> {event_data[FIELDS.FEE]}<br>'
         f'<strong>Email:</strong> {event_data[FIELDS.EMAIL]}</p>'
     )
+
+
+def monthly_byday(dt) -> str:
+    """
+    Given a date or datetime, return the RFC5545 BYDAY token with an ordinal
+    representing the weekday occurrence in the month (e.g. 'BYDAY=4SA;' for 4th Saturday).
+
+    Parameters
+    ----------
+    dt : datetime.date | datetime.datetime
+        The date to compute the ordinal BYDAY for.
+
+    Returns
+    -------
+    str
+        An ordinal BYDAY string like 'BYDAY=1MO;', 'BYDAY=3FR;', etc.
+    """
+    day = dt.day
+    weekday = dt.weekday()  # 0=Mon..6=Sun
+    weekday_map = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']
+    ordinal = ((day - 1) // 7) + 1
+    return f'BYDAY={ordinal}{weekday_map[weekday]};'
 
 
 def show_field_editor(field_name: str, event_data: dict):

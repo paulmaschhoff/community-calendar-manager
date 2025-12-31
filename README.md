@@ -12,6 +12,12 @@ This repo uses [uv](https://docs.astral.sh/uv/) for package and environment mana
 uv run streamlit run main.py
 ```
 
+or run tests with
+
+```bash
+uv run pytest
+```
+
 ## Secrets
 
 This project makes heavy use of [Streamlit secrets](https://docs.streamlit.io/develop/api-reference/connections/st.secrets) for configuration. Primary components include:
